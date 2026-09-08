@@ -6,7 +6,7 @@ import { cn, formatCurrency, formatPercent, getModeBadgeColor, getFragilityColor
 import { 
   Activity, ShieldAlert, Cpu, CheckCircle2, Circle, TrendingUp, TrendingDown, 
   Clock, Play, Pause, Radio, Globe, Shield, RefreshCw, CheckSquare, XCircle, 
-  Lock, AlertTriangle, ArrowRight, Layers, FileCode
+  Lock, AlertTriangle, ArrowRight, Layers, FileCode, RotateCcw
 } from 'lucide-react';
 import type { AtlasMode, DemoScenario, PipelineStage, PendingExecution } from '@/core/types';
 
@@ -14,8 +14,22 @@ export default function CommandCenter() {
   const { state, loading, error, refresh, triggerCycle, setScenario } = useAtlasState(2500);
   const [autoPilot, setAutoPilot] = useState<boolean>(false);
   const [actingPendingId, setActingPendingId] = useState<string | null>(null);
+  const [resetting, setResetting] = useState<boolean>(false);
 
   const isLiveBinance = state?.dataSourceMode === 'LIVE_BINANCE';
+
+  const handleReset = async () => {
+    if (!confirm('Reset ATLAS to initial clean state ($100k capital, clean ledger, fresh cycle)?')) return;
+    setResetting(true);
+    try {
+      await fetch('/api/atlas/reset', { method: 'POST' });
+      await refresh();
+    } catch (err) {
+      console.error('Failed to reset:', err);
+    } finally {
+      setResetting(false);
+    }
+  };
 
   // Auto-Pilot cycle runner
   useEffect(() => {
@@ -205,6 +219,17 @@ export default function CommandCenter() {
           >
             <RefreshCw size={14} />
             Step Cycle
+          </button>
+
+          {/* Reset Demo State Button */}
+          <button
+            onClick={handleReset}
+            disabled={resetting}
+            title="Reset system to pristine starting state ($100k capital, clean ledger)"
+            className="bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white border border-[#1e293b] px-3 py-1.5 rounded-lg text-xs font-mono transition-colors flex items-center gap-1.5"
+          >
+            <RotateCcw size={13} className={resetting ? "animate-spin" : ""} />
+            {resetting ? 'Resetting...' : 'Reset'}
           </button>
         </div>
       </header>
