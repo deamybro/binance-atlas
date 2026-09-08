@@ -13,8 +13,9 @@ import type { AtlasMode, DemoScenario, PipelineStage, PendingExecution } from '@
 export default function CommandCenter() {
   const { state, loading, error, refresh, triggerCycle, setScenario } = useAtlasState(2500);
   const [autoPilot, setAutoPilot] = useState<boolean>(false);
-  const [isLiveBinance, setIsLiveBinance] = useState<boolean>(false);
   const [actingPendingId, setActingPendingId] = useState<string | null>(null);
+
+  const isLiveBinance = state?.dataSourceMode === 'LIVE_BINANCE';
 
   // Auto-Pilot cycle runner
   useEffect(() => {
@@ -25,16 +26,15 @@ export default function CommandCenter() {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ dataSource: 'LIVE_BINANCE' })
-        });
+        }).then(() => refresh());
       } else {
         triggerCycle();
       }
     }, 4000);
     return () => clearInterval(interval);
-  }, [autoPilot, isLiveBinance, triggerCycle]);
+  }, [autoPilot, isLiveBinance, triggerCycle, refresh]);
 
   const toggleDataSource = async (live: boolean) => {
-    setIsLiveBinance(live);
     if (live) {
       await fetch('/api/atlas/cycle', {
         method: 'POST',
@@ -47,6 +47,20 @@ export default function CommandCenter() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ dataSource: 'DEMO_SCENARIO', scenario: 'NORMAL' })
       });
+    }
+    await refresh();
+  };
+
+  const handleStepCycle = async () => {
+    if (isLiveBinance) {
+      await fetch('/api/atlas/cycle', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ dataSource: 'LIVE_BINANCE' })
+      });
+      await refresh();
+    } else {
+      await triggerCycle();
     }
   };
 
@@ -186,7 +200,7 @@ export default function CommandCenter() {
 
           {/* Force Cycle Button */}
           <button 
-            onClick={triggerCycle}
+            onClick={handleStepCycle}
             className="bg-blue-600 hover:bg-blue-500 text-white px-3.5 py-1.5 rounded-lg text-xs font-medium transition-colors flex items-center gap-1.5"
           >
             <RefreshCw size={14} />
