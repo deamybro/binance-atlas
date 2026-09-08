@@ -542,7 +542,6 @@ export default function CommandCenter() {
             <button
               key={scenario}
               onClick={() => {
-                setIsLiveBinance(false);
                 setScenario(scenario);
               }}
               className="px-3 py-1 text-xs font-mono font-semibold rounded border border-[#1e293b] bg-[#111827] text-slate-300 hover:bg-emerald-500/10 hover:text-emerald-400 hover:border-emerald-500/30 transition-colors"
