@@ -43,15 +43,15 @@ export function detectMode(context: ModeContext): { mode: AtlasMode; reason: str
 
 export function detectCascade(market: MultiMarketSnapshot, fragility: FragilityAssessment): boolean {
   // Large price drop (>5% in snapshot) + extreme fragility + high liquidation
-  const largePriceDrop = market.snapshots.some(s => s.priceChange24h < -5);
+  const largePriceDrop = Object.values(market.snapshots).some(s => s.priceChangePercent24h?.value < -5);
   const extremeFragility = fragility.level === 'EXTREME';
-  const highLiquidation = (fragility.metrics?.liquidationVolume || 0) > 1_000_000;
+  const highLiquidation = fragility.components.some(c => c.name.includes('Liquidation') && c.value > 0.8);
   
   return largePriceDrop && extremeFragility && highLiquidation;
 }
 
 export function detectLiquidationExhaustion(market: MultiMarketSnapshot, fragility: FragilityAssessment): boolean {
   // Liquidation activity decreasing + OI stabilizing + volatility normalizing
-  const decreasingLiquidation = (fragility.metrics?.liquidationVolume || 0) < 500_000;
+  const decreasingLiquidation = fragility.components.some(c => c.name.includes('Liquidation') && c.value < 0.3);
   return decreasingLiquidation && fragility.level !== 'EXTREME';
 }

@@ -1,5 +1,8 @@
 // Data classification
 export type DataSource = 'OBSERVED' | 'DERIVED' | 'ESTIMATED';
+export type DataFreshness = 'FRESH' | 'AGING' | 'STALE';
+export type DataStatus = 'AVAILABLE' | 'DEGRADED' | 'UNAVAILABLE';
+export type LiquidationClassification = 'BINANCE_REPORTED' | 'ATLAS_ESTIMATE' | 'UNAVAILABLE';
 
 // Market data
 export interface MarketDataPoint {
@@ -7,6 +10,8 @@ export interface MarketDataPoint {
   source: DataSource;
   timestamp: number;
   age: number; // ms since fetch
+  freshness: DataFreshness;
+  status: DataStatus;
 }
 
 export interface MarketSnapshot {
@@ -144,6 +149,7 @@ export interface RefereeDecision {
   approvedAllocation: number;
   rules: RuleEvaluation[];
   reason: string;
+  policyHash: string;
   timestamp: number;
 }
 
@@ -229,8 +235,22 @@ export interface AccountState {
   mode: ExecutionMode;
 }
 
-// Journal
-export type JournalEventType = 'OBSERVATION' | 'FRAGILITY_CHANGE' | 'OPPORTUNITY_FOUND' | 'OPPORTUNITY_REJECTED' | 'PROPOSAL_CREATED' | 'REFEREE_DECISION' | 'EXECUTION' | 'MODE_CHANGE' | 'THESIS_UPDATE' | 'CYCLE_COMPLETE' | 'ERROR' | 'DATA_STALE';
+export type JournalEventType = 
+  | 'OBSERVATION' 
+  | 'FRAGILITY_CHANGE' 
+  | 'OPPORTUNITY_FOUND' 
+  | 'OPPORTUNITY_REJECTED' 
+  | 'PROPOSAL_CREATED' 
+  | 'REFEREE_DECISION' 
+  | 'EXECUTION' 
+  | 'MODE_CHANGE' 
+  | 'THESIS_UPDATE' 
+  | 'CYCLE_COMPLETE' 
+  | 'ERROR' 
+  | 'DATA_STALE'
+  | 'FAIL_CLOSED'
+  | 'OPERATOR_CONFIRMED'
+  | 'RECONCILIATION';
 
 export interface JournalEvent {
   id: string;
@@ -240,6 +260,10 @@ export interface JournalEvent {
   description: string;
   data?: Record<string, unknown>;
   mode: AtlasMode;
+  hash: string;
+  previousHash: string;
+  policyVersion?: string;
+  policyHash?: string;
 }
 
 // Atlas Cycle
@@ -256,6 +280,10 @@ export interface AtlasCycleResult {
   proposal: AllocationProposal | null;
   refereeDecision: RefereeDecision | null;
   execution: ExecutionResult | null;
+  pendingExecution?: PendingExecution | null;
+  policyVersion?: PolicyVersion;
+  failClosed?: boolean;
+  failClosedReason?: string;
   pipeline: PipelineState;
   decision: AtlasDecisionSummary;
   journalEvents: JournalEvent[];
@@ -283,7 +311,15 @@ export interface AtlasState {
   positions: Position[];
   recentJournal: JournalEvent[];
   marketSnapshots: Record<string, MarketSnapshot>;
+  opportunities: Opportunity[];
+  lastCycleResult: AtlasCycleResult | null;
   lastCycleAt: number | null;
+  dataSourceMode?: 'LIVE_BINANCE' | 'DEMO_SCENARIO';
+  autopsies?: AllocationAutopsy[];
+  policyVersion?: PolicyVersion;
+  pendingExecutions?: PendingExecution[];
+  reconciliations?: ReconciliationResult[];
+  chainVerification?: { valid: boolean; eventCount: number; error?: string };
   timestamp: number;
 }
 
@@ -303,4 +339,72 @@ export interface AllocationAutopsy {
   fragilityChange: number;
   decisionQuality: 'EXCELLENT' | 'GOOD' | 'FAIR' | 'POOR';
   analysis: string;
+}
+
+// Liquidation
+export interface LiquidationEstimate {
+  liquidationPrice: number;
+  currentPrice: number;
+  distancePercent: number; // how far current price is from liquidation (positive = safe)
+  classification: LiquidationClassification;
+  formula: string; // human-readable description of how it was computed
+  maintenanceMarginRate: number;
+}
+
+// Policy-as-Code
+export interface PolicyVersion {
+  version: string;
+  hash: string; // SHA-256 of serialized config
+  config: RiskConfig;
+  timestamp: number;
+  createdBy: 'OPERATOR' | 'SYSTEM_DEFAULT';
+}
+
+// Pending Execution (Execution Gate)
+export interface PendingExecution {
+  id: string;
+  proposal: AllocationProposal;
+  refereeDecision: RefereeDecision;
+  orderPreview: OrderPreview;
+  postTradeProjection: PostTradeProjection;
+  policyVersion: PolicyVersion;
+  createdAt: number;
+  expiresAt: number;
+  status: 'PENDING' | 'CONFIRMED' | 'EXPIRED' | 'CANCELLED';
+}
+
+export interface PostTradeProjection {
+  projectedTotalCapital: number;
+  projectedAvailableCapital: number;
+  projectedAllocatedCapital: number;
+  projectedLeverage: number;
+  projectedNetExposure: number;
+  projectedLiquidationDistance: number | null;
+  projectedConcentration: Record<string, number>;
+}
+
+// Execution Confirmation
+export interface ExecutionConfirmation {
+  pendingExecutionId: string;
+  confirmedAt: number;
+  confirmedBy: 'OPERATOR';
+  executionResult: ExecutionResult | null;
+}
+
+// Post-Trade Reconciliation
+export interface ReconciliationResult {
+  orderId: string;
+  expectedPrice: number;
+  actualPrice: number;
+  priceDelta: number;
+  priceSlippagePercent: number;
+  expectedFee: number;
+  actualFee: number;
+  feeDelta: number;
+  expectedQuantity: number;
+  actualQuantity: number;
+  quantityDelta: number;
+  totalCostDelta: number;
+  status: 'MATCHED' | 'MINOR_DISCREPANCY' | 'MAJOR_DISCREPANCY';
+  details: string;
 }

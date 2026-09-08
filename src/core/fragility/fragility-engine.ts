@@ -103,11 +103,11 @@ export function calculateFragility(
 
   for (const symbol of symbols) {
     const snap = marketSnapshots[symbol];
-    totalOiStress += normalizeOpenInterestStress(snap.openInterest || 0, b.openInterest);
-    totalFundingStress += normalizeFundingStress(snap.fundingRate || 0);
-    totalVolStress += normalizeVolatilityStress(snap.volatility || 0, b.volatility);
-    totalLiqStress += normalizeLiquidationStress(snap.liquidationVolume || 0, b.liquidationActivity);
-    totalLiquidityStress += normalizeLiquidityStress(snap.liquidityDepth || 0, b.liquidityDepth);
+    totalOiStress += normalizeOpenInterestStress(snap.openInterest?.value || 0, b.openInterest);
+    totalFundingStress += normalizeFundingStress(snap.fundingRate?.value || 0);
+    totalVolStress += normalizeVolatilityStress(snap.volatility?.value || 0, b.volatility);
+    totalLiqStress += normalizeLiquidationStress(snap.liquidationActivity?.value || 0, b.liquidationActivity);
+    totalLiquidityStress += normalizeLiquidityStress(snap.liquidityDepth?.value || 0, b.liquidityDepth);
   }
 
   const n = symbols.length;
@@ -118,13 +118,13 @@ export function calculateFragility(
   const avgLiqStress = totalLiqStress / n;
   const avgLiquidityStress = totalLiquidityStress / n;
 
-  // Note: Casts are needed if DataSource enum doesn't map directly from strings; assuming it is defined in types
   const oiComponent: FragilityComponent = {
     name: 'Open Interest Stress',
     weight: w.openInterestStress,
     value: avgOiStress,
     weightedValue: avgOiStress * w.openInterestStress,
-    dataSource: 'BINANCE_FUTURES_API' as DataSource
+    source: 'ESTIMATED',
+    description: 'Stress from high open interest relative to baseline'
   };
 
   const fundingComponent: FragilityComponent = {
@@ -132,7 +132,8 @@ export function calculateFragility(
     weight: w.fundingStress,
     value: avgFundingStress,
     weightedValue: avgFundingStress * w.fundingStress,
-    dataSource: 'BINANCE_FUTURES_API' as DataSource
+    source: 'ESTIMATED',
+    description: 'Stress from extreme funding rates'
   };
 
   const volComponent: FragilityComponent = {
@@ -140,7 +141,8 @@ export function calculateFragility(
     weight: w.volatilityStress,
     value: avgVolStress,
     weightedValue: avgVolStress * w.volatilityStress,
-    dataSource: 'BINANCE_MARKET_DATA' as DataSource
+    source: 'DERIVED',
+    description: 'Stress from high market volatility'
   };
 
   const liqComponent: FragilityComponent = {
@@ -148,7 +150,8 @@ export function calculateFragility(
     weight: w.liquidationStress,
     value: avgLiqStress,
     weightedValue: avgLiqStress * w.liquidationStress,
-    dataSource: 'BINANCE_LIQUIDATIONS' as DataSource
+    source: 'ESTIMATED',
+    description: 'Stress from recent liquidation cascades'
   };
 
   const liquidityComponent: FragilityComponent = {
@@ -156,7 +159,8 @@ export function calculateFragility(
     weight: w.liquidityStress,
     value: avgLiquidityStress,
     weightedValue: avgLiquidityStress * w.liquidityStress,
-    dataSource: 'BINANCE_ORDER_BOOK' as DataSource
+    source: 'DERIVED',
+    description: 'Stress from thin order books'
   };
 
   const components = [
@@ -180,21 +184,18 @@ export function calculateFragility(
 
   const level = classifyFragility(fragilityScore);
 
-  let trend: 'INCREASING' | 'DECREASING' | 'STABLE' = 'STABLE';
+  let trend: 'IMPROVING' | 'STABLE' | 'WORSENING' = 'STABLE';
   if (previousScore !== null) {
-    if (fragilityScore > previousScore + 0.05) trend = 'INCREASING';
-    else if (fragilityScore < previousScore - 0.05) trend = 'DECREASING';
+    if (fragilityScore > previousScore + 0.05) trend = 'WORSENING';
+    else if (fragilityScore < previousScore - 0.05) trend = 'IMPROVING';
   }
-
-  // Use Set to get unique datasources
-  const dataSourcesSet = new Set(components.map(c => c.dataSource));
 
   return {
     score: fragilityScore,
     level,
     trend,
     components,
-    timestamp: Date.now(),
-    dataSources: Array.from(dataSourcesSet)
+    previousScore,
+    timestamp: Date.now()
   };
 }

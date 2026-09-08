@@ -12,8 +12,8 @@ export function calculateOpportunityCost(
   fragility: FragilityAssessment
 ): OpportunityCostAnalysis {
   const liquidityPenalty = (1 - proposed.liquidityScore) * 0.01;
-  const advantage = proposed.expectedReturn 
-    - currentAllocation.expectedReturn 
+  const incrementalExpectedValue = proposed.expectedReturn - currentAllocation.expectedReturn;
+  const advantage = incrementalExpectedValue 
     - proposed.executionCost 
     - proposed.slippageCost 
     - liquidityPenalty
@@ -22,22 +22,17 @@ export function calculateOpportunityCost(
     - proposed.concentrationPenalty;
 
   return {
-    proposedId: proposed.id,
-    baselineId: currentAllocation.id,
-    advantage,
-    costs: {
-      execution: proposed.executionCost,
-      slippage: proposed.slippageCost,
-      liquidity: liquidityPenalty,
-      portfolioRisk: proposed.portfolioImpact,
-      fragility: proposed.fragilityPenalty,
-      concentration: proposed.concentrationPenalty,
-    },
-    metadata: {
-      source: 'DERIVED',
-      reasoning: 'Deterministic opportunity cost calculation'
-    }
-  } as OpportunityCostAnalysis;
+    currentExpectedValue: currentAllocation.expectedReturn,
+    proposedExpectedValue: proposed.expectedReturn,
+    incrementalExpectedValue,
+    executionCost: proposed.executionCost,
+    slippageCost: proposed.slippageCost,
+    liquidityPenalty,
+    portfolioRiskPenalty: proposed.portfolioImpact,
+    fragilityPenalty: proposed.fragilityPenalty,
+    concentrationPenalty: proposed.concentrationPenalty,
+    finalAdvantage: advantage
+  };
 }
 
 export function rankOpportunities(
@@ -47,6 +42,7 @@ export function rankOpportunities(
 ): Opportunity[] {
   const holdOpp = opportunities.find(o => o.type === 'HOLD') || {
     id: 'hold_fallback',
+    name: 'Hold Position',
     type: 'HOLD',
     asset: 'USD',
     expectedReturn: 0,
@@ -58,19 +54,20 @@ export function rankOpportunities(
     portfolioImpact: 0,
     concentrationPenalty: 0,
     opportunityScore: 0,
+    finalAdvantage: 0,
     confidence: 1,
-    metadata: { source: 'DERIVED', reasoning: 'Fallback HOLD' }
+    source: 'DERIVED'
   } as Opportunity;
 
   const ranked = opportunities.map(opp => {
     const analysis = calculateOpportunityCost(opp, holdOpp, portfolio, fragility);
     return {
       ...opp,
-      opportunityScore: analysis.advantage
+      finalAdvantage: analysis.finalAdvantage
     };
   });
 
-  return ranked.sort((a, b) => b.opportunityScore - a.opportunityScore);
+  return ranked.sort((a, b) => b.finalAdvantage - a.finalAdvantage);
 }
 
 export function findBestOpportunity(
@@ -89,7 +86,7 @@ export function findBestOpportunity(
   
   const analysis = calculateOpportunityCost(best, holdOpp, portfolio, fragility);
   
-  if (analysis.advantage <= 0) {
+  if (analysis.finalAdvantage <= 0) {
     return null; // Doesn't beat HOLD
   }
   

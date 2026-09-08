@@ -8,21 +8,30 @@ import {
   PortfolioState,
   FragilityAssessment
 } from '../types';
+import { assessProposedLiquidationRisk } from './liquidation-engine';
+
+export interface RefereeContext {
+  currentPrice?: number; // current market price for the proposed asset
+  policyHash?: string;   // SHA-256 hash of the governing policy version
+}
 
 export function evaluateProposal(
   proposal: AllocationProposal,
   portfolio: PortfolioState,
   fragility: FragilityAssessment,
   config: RiskConfig,
-  dailyLossToday: number
+  dailyLossToday: number,
+  context: RefereeContext = {}
 ): RefereeDecision {
-  if (proposal.action === 'HOLD' || proposal.allocationUsd === 0) {
+  if (proposal.direction === 'HOLD' || proposal.allocationUsd === 0) {
     return {
-      type: 'ALLOW',
-      proposal,
-      evaluations: [],
+      decision: 'ALLOW',
+      requestedAllocation: proposal.allocationUsd,
+      approvedAllocation: proposal.allocationUsd,
+      rules: [],
       reason: 'HOLD proposals or zero allocations do not modify capital allocation and are automatically allowed.',
-      approvedAllocationUsd: proposal.allocationUsd,
+      policyHash: context.policyHash || 'NONE',
+      timestamp: Date.now()
     };
   }
 
@@ -48,13 +57,34 @@ export function evaluateProposal(
     return { rule, ruleLabel, status, currentValue: value, limit, impact };
   };
 
+  // 0. LIQUIDATION_DISTANCE — the headline check
+  if (proposal.leverage > 1 && context.currentPrice && context.currentPrice > 0) {
+    const direction = proposal.direction === 'SHORT' ? 'SHORT' : 'LONG';
+    const liqEstimate = assessProposedLiquidationRisk(
+      context.currentPrice, proposal.leverage, direction, proposal.asset, context.currentPrice
+    );
+    const minLiquidationDistance = 5; // 5% minimum distance to liquidation
+    evaluations.push(
+      evaluate(
+        liqEstimate.distancePercent,
+        minLiquidationDistance,
+        'LIQUIDATION_DISTANCE',
+        'Minimum Liquidation Distance',
+        true,
+        `Estimated liquidation at $${liqEstimate.liquidationPrice.toFixed(2)} is ${liqEstimate.distancePercent.toFixed(2)}% from current price. Classification: ${liqEstimate.classification}. ${liqEstimate.formula}`
+      )
+    );
+  }
+
   // 1. MAX_LEVERAGE
   evaluations.push(
     evaluate(proposal.leverage, config.maxLeverage, 'MAX_LEVERAGE', 'Maximum Leverage Limit', false, 'Leverage exceeds the maximum permitted.')
   );
 
   // 2. MAX_ASSET_CONCENTRATION
-  const currentAssetAlloc = portfolio.allocations?.[proposal.asset] || 0;
+  const currentAssetAlloc = portfolio.positions
+    .filter(p => p.symbol === proposal.asset)
+    .reduce((sum, p) => sum + p.allocationUsd, 0);
   const newAssetTotal = currentAssetAlloc + proposal.allocationUsd;
   const maxAssetAllowed = config.maxAssetConcentration * portfolio.totalCapital;
   evaluations.push(
@@ -65,28 +95,32 @@ export function evaluateProposal(
   }
 
   // 3. MAX_TOTAL_EXPOSURE
-  const newTotalExp = portfolio.totalAllocated + proposal.allocationUsd;
+  const newTotalExp = portfolio.allocatedCapital + proposal.allocationUsd;
   const maxTotalExpAllowed = config.maxTotalExposure * portfolio.totalCapital;
   evaluations.push(
     evaluate(newTotalExp, maxTotalExpAllowed, 'MAX_TOTAL_EXPOSURE', 'Maximum Total Exposure', false, 'Total portfolio exposure exceeds maximum limit.')
   );
   if (newTotalExp > maxTotalExpAllowed) {
-    allowedAllocationUsd = Math.min(allowedAllocationUsd, maxTotalExpAllowed - portfolio.totalAllocated);
+    allowedAllocationUsd = Math.min(allowedAllocationUsd, maxTotalExpAllowed - portfolio.allocatedCapital);
   }
 
   // 4. MAX_NET_EXPOSURE
+  let netDirectionalExposure = portfolio.positions.reduce((sum, p) => {
+    return sum + (p.direction === 'LONG' ? p.allocationUsd : -p.allocationUsd);
+  }, 0);
+  
   const exposureDelta = proposal.direction === 'LONG' ? proposal.allocationUsd : -proposal.allocationUsd;
-  const newNetExp = portfolio.netDirectionalExposure + exposureDelta;
+  const newNetExp = netDirectionalExposure + exposureDelta;
   const maxNetExpAllowed = config.maxNetExposure * portfolio.totalCapital;
   evaluations.push(
     evaluate(Math.abs(newNetExp), maxNetExpAllowed, 'MAX_NET_EXPOSURE', 'Maximum Net Exposure', false, 'Net directional exposure exceeds permitted bounds.')
   );
   if (Math.abs(newNetExp) > maxNetExpAllowed) {
-    if ((portfolio.netDirectionalExposure > 0 && proposal.direction === 'LONG') || 
-        (portfolio.netDirectionalExposure < 0 && proposal.direction === 'SHORT')) {
-      const headroom = maxNetExpAllowed - Math.abs(portfolio.netDirectionalExposure);
+    if ((netDirectionalExposure > 0 && proposal.direction === 'LONG') || 
+        (netDirectionalExposure < 0 && proposal.direction === 'SHORT')) {
+      const headroom = maxNetExpAllowed - Math.abs(netDirectionalExposure);
       allowedAllocationUsd = Math.min(allowedAllocationUsd, headroom);
-    } else if (portfolio.netDirectionalExposure === 0) {
+    } else if (netDirectionalExposure === 0) {
       allowedAllocationUsd = Math.min(allowedAllocationUsd, maxNetExpAllowed);
     }
   }
@@ -110,14 +144,14 @@ export function evaluateProposal(
     allowedAllocationUsd = Math.min(allowedAllocationUsd, dailyLossRoom / proposal.expectedRisk);
   }
 
-  // 7. MIN_LIQUIDITY
+  // 7. MIN_LIQUIDITY (Skip on proposal since it's checked in opportunity stage)
   evaluations.push(
-    evaluate(proposal.liquidityScore, config.minimumLiquidity, 'MIN_LIQUIDITY', 'Minimum Liquidity', true, 'Asset liquidity is too low.')
+    evaluate(1, config.minimumLiquidity, 'MIN_LIQUIDITY', 'Minimum Liquidity', true, 'Asset liquidity is too low.')
   );
 
-  // 8. MAX_SLIPPAGE
+  // 8. MAX_SLIPPAGE (Skip on proposal since it's evaluated in opportunity stage)
   evaluations.push(
-    evaluate(proposal.estimatedSlippage, config.maxSlippage, 'MAX_SLIPPAGE', 'Maximum Slippage', false, 'Estimated slippage exceeds maximum allowed.')
+    evaluate(proposal.opportunityCost.slippageCost, config.maxSlippage, 'MAX_SLIPPAGE', 'Maximum Slippage', false, 'Estimated slippage exceeds maximum allowed.')
   );
 
   // 9. MAX_FRAGILITY
@@ -141,28 +175,30 @@ export function evaluateProposal(
   const failures = evaluations.filter(e => e.status === 'FAIL');
   
   const hasFatalFailures = failures.some(e => 
-    ['MAX_LEVERAGE', 'MIN_LIQUIDITY', 'MAX_SLIPPAGE', 'MAX_FRAGILITY'].includes(e.rule)
+    ['LIQUIDATION_DISTANCE', 'MAX_LEVERAGE', 'MIN_LIQUIDITY', 'MAX_SLIPPAGE', 'MAX_FRAGILITY'].includes(e.rule)
   );
 
-  let type: RefereeDecisionType = 'ALLOW';
+  let decision: RefereeDecisionType = 'ALLOW';
   let reason = 'All risk checks passed.';
 
   if (failures.length > 0) {
     if (!hasFatalFailures && allowedAllocationUsd > 0) {
-      type = 'RESIZE';
+      decision = 'RESIZE';
       reason = 'Proposal resized to comply with risk limits.';
     } else {
-      type = 'DENY';
+      decision = 'DENY';
       reason = 'Proposal denied due to risk limit violations.';
       allowedAllocationUsd = 0;
     }
   }
 
   return {
-    type,
-    proposal,
-    evaluations,
+    decision,
+    requestedAllocation: proposal.allocationUsd,
+    approvedAllocation: allowedAllocationUsd,
+    rules: evaluations,
     reason,
-    approvedAllocationUsd: allowedAllocationUsd,
+    policyHash: context.policyHash || 'NONE',
+    timestamp: Date.now()
   };
 }

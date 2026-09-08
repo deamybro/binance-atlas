@@ -22,12 +22,15 @@ export class SimulationAdapter implements TradingAdapter {
   
   async getAccountState(): Promise<AccountState> {
     const activePositions = Array.from(this.positions.values());
-    const totalUnrealizedPnL = activePositions.reduce((sum, pos) => sum + (pos.unrealizedPnL || 0), 0);
+    const totalUnrealizedPnl = activePositions.reduce((sum, pos) => sum + (pos.unrealizedPnl || 0), 0);
+    const marginUsed = activePositions.reduce((sum, pos) => sum + (pos.allocationUsd || 0), 0);
+    
     return {
-      balance: this.balance,
-      equity: this.balance + totalUnrealizedPnL,
-      unrealizedPnL: totalUnrealizedPnL,
-      availableMargin: this.balance
+      totalBalance: this.balance + totalUnrealizedPnl,
+      availableBalance: this.balance - marginUsed,
+      unrealizedPnl: totalUnrealizedPnl,
+      marginUsed: marginUsed,
+      mode: 'PAPER'
     };
   }
   
@@ -40,23 +43,22 @@ export class SimulationAdapter implements TradingAdapter {
   }
   
   async previewOrder(order: OrderRequest): Promise<OrderPreview> {
-    const estimatedSlippage = order.price * this.slippageModel * (1 + Math.random() * 0.5);
-    const executionPrice = order.side === 'BUY' ? order.price + estimatedSlippage : order.price - estimatedSlippage;
+    const price = order.price || 100;
+    const estimatedSlippage = price * this.slippageModel * (1 + Math.random() * 0.5);
+    const executionPrice = order.side === 'BUY' ? price + estimatedSlippage : price - estimatedSlippage;
     const fee = executionPrice * order.quantity * this.fees.taker;
     const totalCost = (executionPrice * order.quantity) + fee;
     
     return {
-      symbol: order.symbol,
-      side: order.side,
-      quantity: order.quantity,
       estimatedPrice: executionPrice,
       estimatedFee: fee,
+      estimatedSlippage: estimatedSlippage,
       estimatedTotal: totalCost
     };
   }
   
   async executeOrder(order: ApprovedOrder): Promise<ExecutionResult> {
-    const marketPrice = 100; // Expected to be provided or mocked via prices in real use
+    const marketPrice = order.price || 100; 
     const executionPrice = marketPrice;
     const estimatedSlippage = executionPrice * this.slippageModel * (1 + (Math.random() * 0.5));
     const finalPrice = order.side === 'BUY' ? executionPrice + estimatedSlippage : executionPrice - estimatedSlippage;
@@ -80,23 +82,32 @@ export class SimulationAdapter implements TradingAdapter {
     const position: Position = {
       id: positionId,
       symbol: order.symbol,
-      side: order.side === 'BUY' ? 'LONG' : 'SHORT',
-      quantity: order.quantity,
+      direction: order.side === 'BUY' ? 'LONG' : 'SHORT',
+      size: order.quantity,
       entryPrice: finalPrice,
       currentPrice: finalPrice,
-      unrealizedPnL: 0,
-      status: 'OPEN'
+      unrealizedPnl: 0,
+      allocationUsd: finalPrice * order.quantity,
+      leverage: 1,
+      unrealizedPnlPercent: 0,
+      openedAt: Date.now(),
+      thesisStatus: 'VALID',
+      thesisReason: 'Simulation',
+      invalidationConditions: []
     };
     
     this.positions.set(positionId, position);
     
     const result: ExecutionResult = {
       orderId,
-      status: 'FILLED',
+      symbol: order.symbol,
+      side: order.side,
       executedPrice: finalPrice,
       executedQuantity: order.quantity,
       fee,
-      timestamp: Date.now()
+      slippage: estimatedSlippage,
+      timestamp: Date.now(),
+      mode: 'PAPER'
     };
     
     this.executionHistory.push(result);
@@ -112,7 +123,8 @@ export class SimulationAdapter implements TradingAdapter {
       if (prices[pos.symbol]) {
         pos.currentPrice = prices[pos.symbol];
         const priceDiff = pos.currentPrice - pos.entryPrice;
-        pos.unrealizedPnL = pos.side === 'LONG' ? priceDiff * pos.quantity : -priceDiff * pos.quantity;
+        pos.unrealizedPnl = pos.direction === 'LONG' ? priceDiff * pos.size : -priceDiff * pos.size;
+        pos.unrealizedPnlPercent = pos.unrealizedPnl / pos.allocationUsd;
       }
     }
   }
@@ -122,21 +134,24 @@ export class SimulationAdapter implements TradingAdapter {
     if (!pos) return;
     
     const priceDiff = currentPrice - pos.entryPrice;
-    const pnl = pos.side === 'LONG' ? priceDiff * pos.quantity : -priceDiff * pos.quantity;
+    const pnl = pos.direction === 'LONG' ? priceDiff * pos.size : -priceDiff * pos.size;
     
-    this.balance += pnl;
+    this.balance += (pos.allocationUsd + pnl);
     this.positions.delete(positionId);
   }
 
   getPortfolioState(): PortfolioState {
     const activePositions = Array.from(this.positions.values());
-    const totalUnrealizedPnL = activePositions.reduce((sum, pos) => sum + (pos.unrealizedPnL || 0), 0);
+    const totalUnrealizedPnl = activePositions.reduce((sum, pos) => sum + (pos.unrealizedPnl || 0), 0);
+    const allocatedCapital = activePositions.reduce((sum, pos) => sum + (pos.allocationUsd || 0), 0);
+    const totalCapital = this.balance + totalUnrealizedPnl + allocatedCapital;
     
     return {
-      balance: this.balance,
-      equity: this.balance + totalUnrealizedPnL,
+      totalCapital,
+      availableCapital: this.balance,
+      allocatedCapital,
+      atRiskCapital: allocatedCapital, // simplified
       positions: activePositions,
-      dailyPnL: totalUnrealizedPnL,
       timestamp: Date.now()
     };
   }

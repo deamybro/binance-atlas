@@ -1,12 +1,17 @@
 import { z } from 'zod';
 
 export const DataSourceSchema = z.enum(['OBSERVED', 'DERIVED', 'ESTIMATED']);
+export const DataFreshnessSchema = z.enum(['FRESH', 'AGING', 'STALE']);
+export const DataStatusSchema = z.enum(['AVAILABLE', 'DEGRADED', 'UNAVAILABLE']);
+export const LiquidationClassificationSchema = z.enum(['BINANCE_REPORTED', 'ATLAS_ESTIMATE', 'UNAVAILABLE']);
 
 export const MarketDataPointSchema = z.object({
   value: z.number(),
   source: DataSourceSchema,
   timestamp: z.number(),
   age: z.number(),
+  freshness: DataFreshnessSchema,
+  status: DataStatusSchema,
 });
 
 export const MarketSnapshotSchema = z.object({
@@ -141,6 +146,7 @@ export const RefereeDecisionSchema = z.object({
   approvedAllocation: z.number(),
   rules: z.array(RuleEvaluationSchema),
   reason: z.string(),
+  policyHash: z.string(),
   timestamp: z.number(),
 });
 
@@ -222,7 +228,23 @@ export const AccountStateSchema = z.object({
   mode: ExecutionModeSchema,
 });
 
-export const JournalEventTypeSchema = z.enum(['OBSERVATION', 'FRAGILITY_CHANGE', 'OPPORTUNITY_FOUND', 'OPPORTUNITY_REJECTED', 'PROPOSAL_CREATED', 'REFEREE_DECISION', 'EXECUTION', 'MODE_CHANGE', 'THESIS_UPDATE', 'CYCLE_COMPLETE', 'ERROR', 'DATA_STALE']);
+export const JournalEventTypeSchema = z.enum([
+  'OBSERVATION',
+  'FRAGILITY_CHANGE',
+  'OPPORTUNITY_FOUND',
+  'OPPORTUNITY_REJECTED',
+  'PROPOSAL_CREATED',
+  'REFEREE_DECISION',
+  'EXECUTION',
+  'MODE_CHANGE',
+  'THESIS_UPDATE',
+  'CYCLE_COMPLETE',
+  'ERROR',
+  'DATA_STALE',
+  'FAIL_CLOSED',
+  'OPERATOR_CONFIRMED',
+  'RECONCILIATION'
+]);
 
 export const JournalEventSchema = z.object({
   id: z.string(),
@@ -232,12 +254,86 @@ export const JournalEventSchema = z.object({
   description: z.string(),
   data: z.record(z.string(), z.unknown()).optional(),
   mode: AtlasModeSchema,
+  hash: z.string(),
+  previousHash: z.string(),
+  policyVersion: z.string().optional(),
+  policyHash: z.string().optional(),
 });
 
 export const AtlasDecisionSummarySchema = z.object({
   action: z.string(),
   explanation: z.string(),
   details: z.array(z.string()),
+});
+
+export const DemoScenarioSchema = z.enum(['NORMAL', 'FRAGILITY_SPIKE', 'CASCADE', 'EXHAUSTION', 'RECOVERY']);
+
+export const AllocationAutopsySchema = z.object({
+  positionId: z.string(),
+  expectedReturn: z.number(),
+  realizedReturn: z.number(),
+  expectedRisk: z.number(),
+  realizedRisk: z.number(),
+  executionCost: z.number(),
+  slippage: z.number(),
+  opportunityMissed: z.number(),
+  fragilityChange: z.number(),
+  decisionQuality: z.enum(['EXCELLENT', 'GOOD', 'FAIR', 'POOR']),
+  analysis: z.string(),
+});
+
+export const PolicyVersionSchema = z.object({
+  version: z.string(),
+  hash: z.string(),
+  config: RiskConfigSchema,
+  timestamp: z.number(),
+  createdBy: z.enum(['OPERATOR', 'SYSTEM_DEFAULT']),
+});
+
+export const PostTradeProjectionSchema = z.object({
+  projectedTotalCapital: z.number(),
+  projectedAvailableCapital: z.number(),
+  projectedAllocatedCapital: z.number(),
+  projectedLeverage: z.number(),
+  projectedNetExposure: z.number(),
+  projectedLiquidationDistance: z.number().nullable(),
+  projectedConcentration: z.record(z.string(), z.number()),
+});
+
+export const PendingExecutionSchema = z.object({
+  id: z.string(),
+  proposal: AllocationProposalSchema,
+  refereeDecision: RefereeDecisionSchema,
+  orderPreview: OrderPreviewSchema,
+  postTradeProjection: PostTradeProjectionSchema,
+  policyVersion: PolicyVersionSchema,
+  createdAt: z.number(),
+  expiresAt: z.number(),
+  status: z.enum(['PENDING', 'CONFIRMED', 'EXPIRED', 'CANCELLED']),
+});
+
+export const ExecutionConfirmationSchema = z.object({
+  pendingExecutionId: z.string(),
+  confirmedAt: z.number(),
+  confirmedBy: z.literal('OPERATOR'),
+  executionResult: ExecutionResultSchema.nullable(),
+});
+
+export const ReconciliationResultSchema = z.object({
+  orderId: z.string(),
+  expectedPrice: z.number(),
+  actualPrice: z.number(),
+  priceDelta: z.number(),
+  priceSlippagePercent: z.number(),
+  expectedFee: z.number(),
+  actualFee: z.number(),
+  feeDelta: z.number(),
+  expectedQuantity: z.number(),
+  actualQuantity: z.number(),
+  quantityDelta: z.number(),
+  totalCostDelta: z.number(),
+  status: z.enum(['MATCHED', 'MINOR_DISCREPANCY', 'MAJOR_DISCREPANCY']),
+  details: z.string(),
 });
 
 export const AtlasCycleResultSchema = z.object({
@@ -253,6 +349,10 @@ export const AtlasCycleResultSchema = z.object({
   proposal: AllocationProposalSchema.nullable(),
   refereeDecision: RefereeDecisionSchema.nullable(),
   execution: ExecutionResultSchema.nullable(),
+  pendingExecution: PendingExecutionSchema.nullable().optional(),
+  policyVersion: PolicyVersionSchema.optional(),
+  failClosed: z.boolean().optional(),
+  failClosedReason: z.string().optional(),
   pipeline: PipelineStateSchema,
   decision: AtlasDecisionSummarySchema,
   journalEvents: z.array(JournalEventSchema),
@@ -273,24 +373,20 @@ export const AtlasStateSchema = z.object({
   positions: z.array(PositionSchema),
   recentJournal: z.array(JournalEventSchema),
   marketSnapshots: z.record(z.string(), MarketSnapshotSchema),
+  opportunities: z.array(OpportunitySchema).optional(),
+  lastCycleResult: AtlasCycleResultSchema.nullable(),
   lastCycleAt: z.number().nullable(),
+  dataSourceMode: z.enum(['LIVE_BINANCE', 'DEMO_SCENARIO']).optional(),
+  autopsies: z.array(AllocationAutopsySchema).optional(),
+  policyVersion: PolicyVersionSchema.optional(),
+  pendingExecutions: z.array(PendingExecutionSchema).optional(),
+  reconciliations: z.array(ReconciliationResultSchema).optional(),
+  chainVerification: z.object({
+    valid: z.boolean(),
+    eventCount: z.number(),
+    error: z.string().optional(),
+  }).optional(),
   timestamp: z.number(),
-});
-
-export const DemoScenarioSchema = z.enum(['NORMAL', 'FRAGILITY_SPIKE', 'CASCADE', 'EXHAUSTION', 'RECOVERY']);
-
-export const AllocationAutopsySchema = z.object({
-  positionId: z.string(),
-  expectedReturn: z.number(),
-  realizedReturn: z.number(),
-  expectedRisk: z.number(),
-  realizedRisk: z.number(),
-  executionCost: z.number(),
-  slippage: z.number(),
-  opportunityMissed: z.number(),
-  fragilityChange: z.number(),
-  decisionQuality: z.enum(['EXCELLENT', 'GOOD', 'FAIR', 'POOR']),
-  analysis: z.string(),
 });
 
 // Infer and export types

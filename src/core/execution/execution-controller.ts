@@ -25,7 +25,7 @@ export class ExecutionController {
       type: 'MARKET',
       quantity: refereeDecision.approvedAllocation / currentPrice,
       proposalId: proposal.id,
-      refereeDecisionId: refereeDecision.id || `ref_${Date.now()}`,
+      refereeDecisionId: `ref_${Date.now()}`,
       approvedAllocation: refereeDecision.approvedAllocation,
     };
     
